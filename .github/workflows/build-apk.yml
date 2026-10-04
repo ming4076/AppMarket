@@ -1,0 +1,181 @@
+name: Build AppMarket APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Debug and Release APK
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # ============================================================
+      # 1. 获取源码
+      # ============================================================
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+      # ============================================================
+      # 2. 安装 JDK 21
+      # ============================================================
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+
+
+      # ============================================================
+      # 3. 配置 Gradle
+      # ============================================================
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+
+      # ============================================================
+      # 4. 配置 Android SDK
+      # ============================================================
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+
+      # ============================================================
+      # 5. 安装 Android SDK
+      # ============================================================
+      - name: Install Android SDK
+        run: |
+          yes | sdkmanager --licenses || true
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-37" \
+            "build-tools;35.0.0"
+
+
+      # ============================================================
+      # 6. Gradle Wrapper 权限
+      # ============================================================
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
+
+
+      # ============================================================
+      # 7. 检查环境
+      # ============================================================
+      - name: Check environment
+        run: |
+          echo "===== Java ====="
+          java -version
+
+          echo ""
+          echo "===== Gradle ====="
+          ./gradlew --version
+
+          echo ""
+          echo "===== Android SDK ====="
+          sdkmanager --list_installed
+
+
+      # ============================================================
+      # 8. 编译 Debug
+      #
+      # 注意：
+      # 这个项目正确的模块是 :app:android
+      # ============================================================
+      - name: Build Debug APK
+        run: |
+          ./gradlew \
+            :app:android:assembleDebug \
+            --stacktrace \
+            --no-daemon
+
+
+      # ============================================================
+      # 9. 编译 Release
+      # ============================================================
+      - name: Build Release APK
+        run: |
+          ./gradlew \
+            :app:android:assembleRelease \
+            --stacktrace \
+            --no-daemon
+
+
+      # ============================================================
+      # 10. 查找 APK
+      # ============================================================
+      - name: Find APK files
+        run: |
+          echo "========================================"
+          echo "Generated APK files"
+          echo "========================================"
+
+          find app/android/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print
+
+          echo "========================================"
+
+
+      # ============================================================
+      # 11. 创建 APK 输出目录
+      # ============================================================
+      - name: Prepare APK files
+        run: |
+          set -e
+
+          mkdir -p apk-output
+
+          DEBUG_APK=$(find \
+            app/android/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          RELEASE_APK=$(find \
+            app/android/build/outputs/apk/release \
+            -type f \
+            -name "*.apk" \
+            | head -n 1)
+
+          if [ -z "$DEBUG_APK" ]; then
+            echo "ERROR: Debug APK not found."
+            exit 1
+          fi
+
+          if [ -z "$RELEASE_APK" ]; then
+            echo "ERROR: Release APK not found."
+            exit 1
+          fi
+
+          cp "$DEBUG_APK" \
+            "apk-output/AppMarket-debug-unsigned.apk"
+
+          cp "$RELEASE_APK" \
+            "apk-output/AppMarket-release-unsigned.apk"
+
+          echo ""
+          echo "========================================"
+          echo "APK output"
+          echo "========================================"
+
+          ls -lh apk-output
+
+
+      # ============================================================
+      # 12. 输出 SHA-256
+      # ============================================================
+      - name: Calculate SHA256
+        run: |
+          echo "========================================"
+          echo "SHA256"
+ 
