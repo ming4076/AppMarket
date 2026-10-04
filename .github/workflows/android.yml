@@ -198,10 +198,16 @@ jobs:
             exit 1
           fi
 
-          # 保留 Gradle 原本生成的文件名
-          cp "$DEBUG_APK" apk-output/
+          # 保留 Gradle 原本生成的文件名（我发现发布到release的小版本号括号变成.，所以对下面代码进行修改）
+          cp "$DEBUG_APK" \
+  "apk-output/AppMarket-v${{ steps.version.outputs.version_name }}
+(${{ steps.version.outputs.version_code }}
+)_debug.apk"
 
-          cp "$RELEASE_APK" apk-output/
+          cp "$RELEASE_APK" \
+  "apk-output/AppMarket-v${{ steps.version.outputs.version_name }}
+(${{ steps.version.outputs.version_code }}
+).apk"
 
 
       # ============================================================
