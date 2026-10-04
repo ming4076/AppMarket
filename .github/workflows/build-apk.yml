@@ -14,9 +14,9 @@ jobs:
     steps:
 
       # ============================================================
-      # 1. 获取源码
+      # 1. 获取源代码
       # ============================================================
-      - name: Checkout source
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -25,7 +25,7 @@ jobs:
       # ============================================================
       # 2. 安装 JDK 21
       # ============================================================
-      - name: Setup JDK 21
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -41,54 +41,38 @@ jobs:
 
 
       # ============================================================
-      # 4. 配置 Android SDK
-      # ============================================================
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-
-      # ============================================================
-      # 5. 安装 Android SDK
-      # ============================================================
-      - name: Install Android SDK
-        run: |
-          yes | sdkmanager --licenses || true
-
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-37" \
-            "build-tools;35.0.0"
-
-
-      # ============================================================
-      # 6. Gradle Wrapper 权限
+      # 4. 给 Gradle Wrapper 执行权限
       # ============================================================
       - name: Make Gradle executable
         run: chmod +x ./gradlew
 
 
       # ============================================================
-      # 7. 检查环境
+      # 5. 检查环境
       # ============================================================
-      - name: Check environment
+      - name: Check build environment
         run: |
-          echo "===== Java ====="
+          echo "========== Java =========="
           java -version
 
           echo ""
-          echo "===== Gradle ====="
+          echo "========== Gradle =========="
           ./gradlew --version
-
-          echo ""
-          echo "===== Android SDK ====="
-          sdkmanager --list_installed
 
 
       # ============================================================
-      # 8. 编译 Debug
+      # 6. 清理旧构建
+      # ============================================================
+      - name: Clean project
+        run: |
+          ./gradlew clean --stacktrace --no-daemon
+
+
+      # ============================================================
+      # 7. 编译 Debug APK
       #
-      # 注意：
-      # 这个项目正确的模块是 :app:android
+      # 不提供 KEYSTORE_PATH
+      # 因此项目使用默认 Debug 签名
       # ============================================================
       - name: Build Debug APK
         run: |
@@ -99,7 +83,12 @@ jobs:
 
 
       # ============================================================
-      # 9. 编译 Release
+      # 8. 编译 Release APK
+      #
+      # 不提供 KEYSTORE_PATH
+      # 项目会自动使用 debug signingConfig
+      #
+      # 之后可以使用 MT 管理器重新签名
       # ============================================================
       - name: Build Release APK
         run: |
@@ -110,7 +99,7 @@ jobs:
 
 
       # ============================================================
-      # 10. 查找 APK
+      # 9. 查找生成的 APK
       # ============================================================
       - name: Find APK files
         run: |
@@ -127,7 +116,7 @@ jobs:
 
 
       # ============================================================
-      # 11. 创建 APK 输出目录
+      # 10. 整理 APK
       # ============================================================
       - name: Prepare APK files
         run: |
@@ -147,6 +136,13 @@ jobs:
             -name "*.apk" \
             | head -n 1)
 
+          echo "Debug APK:"
+          echo "$DEBUG_APK"
+
+          echo ""
+          echo "Release APK:"
+          echo "$RELEASE_APK"
+
           if [ -z "$DEBUG_APK" ]; then
             echo "ERROR: Debug APK not found."
             exit 1
@@ -158,24 +154,32 @@ jobs:
           fi
 
           cp "$DEBUG_APK" \
-            "apk-output/AppMarket-debug-unsigned.apk"
+            "apk-output/AppMarket-debug.apk"
 
           cp "$RELEASE_APK" \
-            "apk-output/AppMarket-release-unsigned.apk"
+            "apk-output/AppMarket-release.apk"
+
+
+      # ============================================================
+      # 11. 验证 APK 文件
+      # ============================================================
+      - name: Verify APK files
+        run: |
+          set -e
+
+          echo "========================================"
+          echo "APK information"
+          echo "========================================"
+
+          ls -lh apk-output/
 
           echo ""
           echo "========================================"
-          echo "APK output"
+          echo "APK SHA256"
           echo "========================================"
 
-          ls -lh apk-output
+          sha256sum apk-output/*.apk
 
 
       # ============================================================
-      # 12. 输出 SHA-256
-      # ============================================================
-      - name: Calculate SHA256
-        run: |
-          echo "========================================"
-          echo "SHA256"
- 
+      # 12. 验证
