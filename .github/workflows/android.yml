@@ -1,60 +1,246 @@
-name: Android CI
+name: Build AppMarket APK
 
 on:
   workflow_dispatch:
-  push:
-    branches: ["main"]
-    tags:
-      - "v*"
-    paths-ignore:
-      - "README.md"
-      - "doc/*"
-      - ".github/workflows/android.yml"
+
+# 创建 GitHub Release 必须有写权限
+permissions:
+  contents: write
 
 jobs:
   build:
+    name: Build Debug and Release APK
     runs-on: ubuntu-latest
 
     steps:
+      # ============================================================
+      # 1. 获取源代码
+      # ============================================================
       - name: Checkout Repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
+      # ============================================================
+      # 2. 安装 JDK 21
+      # ============================================================
       - name: Set up JDK 21
         uses: actions/setup-java@v5
         with:
-          distribution: "zulu"
-          java-version: "21"
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
 
+      # ============================================================
+      # 3. 配置 Gradle
+      # ============================================================
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v5
 
-      - name: Decode Signing Key
-        run: echo ${{ secrets.SIGNING_KEY }} | base64 -d > keystore.jks
+      # ============================================================
+      # 4. 给 Gradle Wrapper 执行权限
+      # ============================================================
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
 
+      # ============================================================
+      # 5. 读取上游项目版本号
+      # 修复 sed 捕获组错误
+      # 不修改任何源码
+      # ============================================================
+      - name: Read App Version
+        id: version
+        shell: bash
+        run: |
+          set -e
+
+          VERSION_FILE="buildSrc/src/main/kotlin/ProjectConfig.kt"
+
+          if [ ! -f "$VERSION_FILE" ]; then
+            echo "ERROR: Version file not found: $VERSION_FILE"
+            exit 1
+          fi
+
+          VERSION_NAME=$(sed -n \
+            's/.*VERSION_NAME = "\([^"]*\)".*/\1/p' \
+            "$VERSION_FILE" | head -n 1)
+
+          VERSION_CODE=$(sed -n \
+            's/.*VERSION_CODE = \([0-9][0-9]*\).*/\1/p' \
+            "$VERSION_FILE" | head -n 1)
+
+          if [ -z "$VERSION_NAME" ]; then
+            echo "ERROR: VERSION_NAME not found."
+            exit 1
+          fi
+
+          if [ -z "$VERSION_CODE" ]; then
+            echo "ERROR: VERSION_CODE not found."
+            exit 1
+          fi
+
+          echo "VERSION_NAME=$VERSION_NAME"
+          echo "VERSION_CODE=$VERSION_CODE"
+
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+
+      # ============================================================
+      # 6. 显示版本信息
+      # ============================================================
+      - name: Show App Version
+        run: |
+          echo "========================================"
+          echo "AppMarket Version"
+          echo "========================================"
+          echo "Version Name: ${{ steps.version.outputs.version_name }}"
+          echo "Version Code: ${{ steps.version.outputs.version_code }}"
+          echo "Release Tag: v${{ steps.version.outputs.version_name }}"
+          echo "========================================"
+
+      # ============================================================
+      # 7. 检查构建环境
+      # ============================================================
+      - name: Check build environment
+        run: |
+          echo "========== Java =========="
+          java -version
+          echo ""
+          echo "========== Gradle =========="
+          ./gradlew --version
+
+      # ============================================================
+      # 8. 清理旧构建
+      # ============================================================
+      - name: Clean project
+        run: |
+          ./gradlew clean --stacktrace --no-daemon
+
+      # ============================================================
+      # 9. 编译 Debug APK
+      # ============================================================
+      - name: Build Debug APK
+        run: |
+          ./gradlew \
+            :app:android:assembleDebug \
+            --stacktrace \
+            --no-daemon
+
+      # ============================================================
+      # 10. 编译 Release APK
+      # ============================================================
       - name: Build Release APK
         run: |
-          ./gradlew :app:android:assembleRelease
-          echo "APK_FILE=$(find app/android/build/outputs/apk/release -name '*.apk' | head -n 1)" >> $GITHUB_ENV
-        env:
-          KEYSTORE_PATH: ${{ github.workspace }}/keystore.jks
-          KEYSTORE_PASS: ${{ secrets.KEY_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          ./gradlew \
+            :app:android:assembleRelease \
+            --stacktrace \
+            --no-daemon
 
-      - name: Upload APK Artifact
-        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
-        uses: actions/upload-artifact@v7
-        with:
-          path: ${{ env.APK_FILE }}
-          archive: false
-
-      - name: Display APK Hashes
+      # ============================================================
+      # 11. 查找并整理 APK
+      # 保留 Gradle 原始文件名
+      # 同时检查 APK 是否存在以及是否重复
+      # ============================================================
+      - name: Prepare APK files
+        shell: bash
         run: |
-          echo "### APK Hashes" >> $GITHUB_STEP_SUMMARY
-          echo "| Hash Type | Hash Value |" >> $GITHUB_STEP_SUMMARY
-          echo "| --- | --- |" >> $GITHUB_STEP_SUMMARY
-          echo "| SHA256 | \`$(sha256sum "$APK_FILE" | awk '{ print $1 }')\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| SHA1 | \`$(sha1sum "$APK_FILE" | awk '{ print $1 }')\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| MD5 | \`$(md5sum "$APK_FILE" | awk '{ print $1 }')\` |" >> $GITHUB_STEP_SUMMARY
+          set -euo pipefail
+
+          mkdir -p apk-output
+
+          echo "========================================"
+          echo "Generated APK files"
+          echo "========================================"
+
+          find app/android/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print
+
+          echo "========================================"
+
+          DEBUG_DIR="app/android/build/outputs/apk/debug"
+          RELEASE_DIR="app/android/build/outputs/apk/release"
+
+          if [ ! -d "$DEBUG_DIR" ]; then
+            echo "ERROR: Debug APK directory not found."
+            exit 1
+          fi
+
+          if [ ! -d "$RELEASE_DIR" ]; then
+            echo "ERROR: Release APK directory not found."
+            exit 1
+          fi
+
+          mapfile -t DEBUG_APKS < <(
+            find "$DEBUG_DIR" -maxdepth 1 -type f -name "*.apk" | sort
+          )
+
+          mapfile -t RELEASE_APKS < <(
+            find "$RELEASE_DIR" -maxdepth 1 -type f -name "*.apk" | sort
+          )
+
+          if [ "${#DEBUG_APKS[@]}" -ne 1 ]; then
+            echo "ERROR: Expected exactly one Debug APK, found ${#DEBUG_APKS[@]}."
+            printf '%s\n' "${DEBUG_APKS[@]}"
+            exit 1
+          fi
+
+          if [ "${#RELEASE_APKS[@]}" -ne 1 ]; then
+            echo "ERROR: Expected exactly one Release APK, found ${#RELEASE_APKS[@]}."
+            printf '%s\n' "${RELEASE_APKS[@]}"
+            exit 1
+          fi
+
+          DEBUG_APK="${DEBUG_APKS[0]}"
+          RELEASE_APK="${RELEASE_APKS[0]}"
+
+          echo "Debug APK: $DEBUG_APK"
+          echo "Release APK: $RELEASE_APK"
+
+          cp "$DEBUG_APK" apk-output/
+          cp "$RELEASE_APK" apk-output/
+
+          APK_COUNT=$(find apk-output -maxdepth 1 -type f -name "*.apk" | wc -l)
+
+          if [ "$APK_COUNT" -ne 2 ]; then
+            echo "ERROR: Expected 2 APK files, found $APK_COUNT."
+            exit 1
+          fi
+
+      # ============================================================
+      # 12. 验证 APK 文件并计算 SHA-256
+      # ============================================================
+      - name: Verify APK files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================"
+          echo "APK files"
+          echo "========================================"
+
+          ls -lh apk-output/
+
+          echo ""
+          echo "========================================"
+          echo "APK SHA256"
+          echo "========================================"
+
+          sha256sum apk-output/*.apk
+
+      # ============================================================
+      # 13. 创建 GitHub Release 并上传 APK
+      # Tag 格式：v版本号
+      # Release 名称：AppMarket v版本号
+      # ============================================================
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: v${{ steps.version.outputs.version_name }}
+          name: AppMarket v${{ steps.version.outputs.version_name }}
+          generate_release_notes: true
+          files: |
+            apk-output/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
